@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-Region Active-Active · Global Load Balancer</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="kicker">GemFire · Multi-Region Active-Active</span>
+    <h1>Global load balancer</h1>
+  </div>
+  <div class="topbar-right">
+    <div id="conn" class="conn" title="Live feed status"><span class="dot"></span><span id="conn-label">connecting</span></div>
+    <div id="mode" class="mode"><span class="mode-label">mode</span><strong id="mode-value">—</strong></div>
+  </div>
+</header>
+
+<section class="strip" aria-label="summary">
+  <div class="chip"><span class="chip-k">total writes</span><strong id="sum-writes">0</strong></div>
+  <div class="chip"><span class="chip-k">avg latency</span><strong id="sum-latency">0 ms</strong></div>
+  <div class="chip"><span class="chip-k">fast region</span><strong id="sum-fast">—</strong></div>
+  <div class="chip chip-wide"><span class="chip-k">last event</span><strong id="sum-event">—</strong></div>
+</section>
+
+<main>
+  <section id="regions" class="regions" aria-label="regions"></section>
+
+  <section class="charts" aria-label="charts">
+    <div class="panel">
+      <h2>Write distribution</h2>
+      <div id="dist" class="dist"></div>
+    </div>
+    <div class="panel">
+      <h2>Write latency over time</h2>
+      <canvas id="latency" class="latency" width="640" height="240"></canvas>
+      <div id="legend" class="legend"></div>
+    </div>
+  </section>
+
+  <section class="panel feed-panel">
+    <h2>Event feed</h2>
+    <ol id="feed" class="feed"></ol>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,823 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Multi-Region Active-Active GemFire Demo — JCON USA 2026
+#
+# A single command surface for the whole world:
+#
+# Topology: Spring Cloud Gateway on :8080 is the global load balancer. Behind it,
+# the same Spring Boot app runs once per region (8081-8085), and each copy only
+# talks to its own GemFire cluster (7071-7075). Toxiproxy (18082-18085) adds real
+# latency to the "remote" regions 2-5. GemFire WAN replicates between regions.
+#
+#   ./world up                 # pre-flight, build, start 5 regions + apps + gateway
+#   ./world status             # table of regions, health, ports, last writes
+#   ./world region-destroy N   # stop region N: its grid and its app
+#   ./world region-restore N   # bring region N back, live recovery
+#   ./world demo               # scripted full run (normal → failover → degrade
+#                              #   → recover) with a live terminal panel
+#   ./world down               # tear the whole world down, volumes included
+#
+#   ./world pull               # pre-pull every image (prep, before going offline)
+#
+# Conference-proof: deterministic ports, works offline (images pre-pulled),
+# fast startup, and clean region kill/restore without disturbing the others.
+# =============================================================================
+
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# =============================================================================
+# CONFIG (deterministic ports — do not change these on stage)
+# =============================================================================
+REGION_NAMES=(region1 region2 region3 region4 region5)
+REGION_PORTS=(7071 7072 7073 7074 7075)
+APP_PORT=8080                                    # global load balancer: the one URL callers use
+REGION_APP_PORTS=(8081 8082 8083 8084 8085)      # one regional app per region
+REGION_LATENCY_MS=(0 150 250 200 300)            # toxiproxy latency per region (region1 is local)
+TOXI_API=8474
+TOXI_PORTS=(18082 18083 18084 18085)
+APP_JAR="target/publish-0.0.1-SNAPSHOT.jar"
+GATEWAY_JAR="gateway/target/gateway-0.0.1-SNAPSHOT.jar"
+RUN_DIR="${TMPDIR:-/tmp}/publish-demo"          # <name>.log and <name>.pid per process
+APP_LOG="${RUN_DIR}/gateway.log"
+mkdir -p "$RUN_DIR"
+TMPH="${TMPDIR:-/tmp}/publish-demo-hdr.$$"
+JAVA_VERSION="25.0.1.0-sem"
+FAST_REGION=region1
+GEMFIRE_IMAGE="gemfire/gemfire-all:10.3-jdk25"
+MIN_DOCKER_MEM_GIB=12
+
+RED='\033[1;31m'; GREEN='\033[1;32m'; BLUE='\033[1;34m'; WHITE='\033[1;37m'; CYAN='\033[1;36m'; NC='\033[0m'
+YELLOW='\033[1;33m'
+
+log()   { echo -e "${BLUE}[INFO]${NC} $*"; }
+ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
+err()   { echo -e "${RED}[ERR]${NC} $*" >&2; }
+banner(){ echo -e "\n${WHITE}#### $1${NC}\n"; }
+
+is_tty() { [[ -t 1 ]]; }
+
+# Quiet wrapper so docker/compose warnings and obsoleted-attribute noise
+# don't clutter the on-stage terminal.
+dq() { docker compose "$@" 2>/dev/null; }
+
+cleanup() {
+    # Only kill the app if this session launched it AND we're not detaching.
+    # For `up` we intentionally leave the app running; for `demo` the trap may
+    # be used to stop it. The pidfile is the single source of truth for the app.
+    rm -f "$TMPH"
+}
+trap cleanup EXIT
+
+# Stop one JVM we launched (gateway, region1..5), by its pidfile.
+stop_proc() {
+    local name="$1" pidfile="${RUN_DIR}/$1.pid"
+    if [[ -f "$pidfile" ]]; then
+        local pid
+        pid=$(cat "$pidfile" 2>/dev/null || true)
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            ok "Stopped ${name} (pid ${pid})"
+        fi
+        rm -f "$pidfile"
+    fi
+}
+
+# Stop the gateway and every regional app.
+stop_app() {
+    local name
+    stop_proc gateway
+    for name in "${REGION_NAMES[@]}"; do stop_proc "$name"; done
+}
+
+# =============================================================================
+# PRE-FLIGHT
+# =============================================================================
+# every image the world runs, read from the compose files (single source of truth)
+demo_images() {
+    local f
+    for f in docker/*/compose.yaml; do
+        dq -f "$f" config --images
+    done | sort -u
+}
+
+# pre-pull every image so `up` works with no network (run during prep)
+pull() {
+    banner "Pulling all demo images"
+    local img failed=0
+    for img in $(demo_images); do
+        docker pull "$img" || { err "Could not pull ${img}"; failed=1; }
+    done
+    (( failed == 0 )) || exit 1
+    ok "All images present. The world can now come up offline."
+}
+
+# Use the same OpenJ9 runtime for builds, initial startup, and region recovery.
+use_app_java() {
+    export JAVA_HOME="${SDKMAN_DIR:-$HOME/.sdkman}/candidates/java/${JAVA_VERSION}"
+    if [[ ! -x "$JAVA_HOME/bin/java" || ! -x "$JAVA_HOME/bin/javac" ]]; then
+        err "IBM Semeru JDK missing. Install before going offline: sdk install java ${JAVA_VERSION}"
+        return 1
+    fi
+    local version
+    version=$("$JAVA_HOME/bin/java" -version 2>&1) || return 1
+    if [[ "$version" != *OpenJ9* || "$version" != *'version "25.'* ]]; then
+        err "Expected IBM Semeru Java 25 with OpenJ9 at ${JAVA_HOME}; got: ${version}"
+        return 1
+    fi
+    export PATH="$JAVA_HOME/bin:$PATH"
+    ok "IBM Semeru Java 25 / OpenJ9 (${JAVA_VERSION})"
+}
+
+preflight() {
+    banner "Pre-flight checks"
+
+    # Docker
+    if ! command -v docker >/dev/null 2>&1; then
+        err "Docker is not installed or not on PATH."
+        exit 1
+    fi
+    if ! docker info >/dev/null 2>&1; then
+        err "Docker daemon is not running. Start Docker Desktop and retry."
+        exit 1
+    fi
+    ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?') is running"
+
+    # Docker Compose (v2 plugin)
+    if ! docker compose version >/dev/null 2>&1; then
+        err "Docker Compose v2 is not available (need 'docker compose')."
+        exit 1
+    fi
+    ok "Docker Compose $(docker compose version --short 2>/dev/null || echo '?') is available"
+
+    # Docker memory: 10 GemFire JVMs + console need ~9 GiB; below this, regions get OOM-killed
+    local mem_bytes mem_gib
+    mem_bytes=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
+    mem_gib=$(( mem_bytes / 1024 / 1024 / 1024 ))
+    if (( mem_gib < MIN_DOCKER_MEM_GIB )); then
+        err "Docker has ${mem_gib} GiB of memory; the world needs at least ${MIN_DOCKER_MEM_GIB} GiB."
+        err "Raise it in Docker Desktop → Settings → Resources → Memory, then retry."
+        exit 1
+    fi
+    ok "Docker has ${mem_gib} GiB of memory (need ${MIN_DOCKER_MEM_GIB})"
+
+    use_app_java || exit 1
+
+    # Every image present (offline safety). GemFire is fatal, monitoring is not.
+    local img images
+    local -a missing=()
+    images=$(demo_images)
+    if [[ -z "$images" ]]; then
+        err "Could not read the image list from docker/*/compose.yaml"
+        exit 1
+    fi
+    while IFS= read -r img; do
+        if docker image inspect "$img" >/dev/null 2>&1; then
+            ok "Image ${img} is present locally"
+        else
+            missing+=("$img")
+        fi
+    done <<< "$images"
+    if (( ${#missing[@]} )); then
+        warn "${#missing[@]} image(s) not found locally — attempting pull (needs network)."
+        warn "For offline runs, pre-pull with:  ./world pull"
+        for img in "${missing[@]}"; do
+            if docker pull "$img"; then
+                ok "Pulled ${img}"
+            elif [[ "$img" == "$GEMFIRE_IMAGE" ]]; then
+                err "Could not pull ${img} — the regions cannot start."
+                exit 1
+            else
+                warn "Could not pull ${img} — monitoring will be unavailable"
+            fi
+        done
+    fi
+
+    # Ports free — but if any of our regions are already up (idempotent re-run),
+    # the demo owns these ports, so don't fail.
+    local already_up=0
+    if dq -f "docker/${REGION_NAMES[0]}/compose.yaml" ps -q 2>/dev/null | grep -q .; then
+        already_up=1
+    fi
+    local p
+    for p in "${REGION_PORTS[@]}" "$APP_PORT" "${REGION_APP_PORTS[@]}" "$TOXI_API" "${TOXI_PORTS[@]}" 3000 9090; do
+        if lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
+            if [[ "$already_up" == "1" ]]; then
+                ok "Port ${p} already serving the demo (world is up; idempotent re-run)"
+            else
+                err "Port ${p} is already in use. Free it before standing up the demo."
+                exit 1
+            fi
+        else
+            ok "Port ${p} is free"
+        fi
+    done
+
+    banner "Pre-flight passed"
+}
+
+# =============================================================================
+# BUILD
+# =============================================================================
+build_app() {
+    use_app_java || return 1
+    if [[ -f "$APP_JAR" ]]; then
+        ok "Regional app already built ($APP_JAR) — skipping Maven build"
+    else
+        banner "Building the regional app (Spring Boot 4.1.1 / Java 25)"
+        ./mvnw -q -DskipTests package
+        ok "Build complete: ${APP_JAR}"
+    fi
+    if [[ -f "$GATEWAY_JAR" ]]; then
+        ok "Gateway already built ($GATEWAY_JAR) — skipping Maven build"
+    else
+        banner "Building the global load balancer (Spring Cloud Gateway)"
+        ./mvnw -q -f gateway/pom.xml -DskipTests package
+        ok "Build complete: ${GATEWAY_JAR}"
+    fi
+}
+
+# =============================================================================
+# REGIONS
+# =============================================================================
+region_ready() {
+    local port="$1"
+    curl -sf -o /dev/null --max-time 2 "http://localhost:${port}/gemfire-api/v1/ping" 2>/dev/null
+}
+
+wait_for_region() {
+    local port="$1" name="$2" tries="${3:-120}"
+    local i
+    for i in $(seq 1 "$tries"); do
+        if region_ready "$port"; then return 0; fi
+        sleep 2
+    done
+    return 1
+}
+
+wait_for_account_region() {
+    local port="$1" tries="${2:-90}"
+    local i code
+    for i in $(seq 1 "$tries"); do
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://localhost:${port}/gemfire-api/v1/Account" 2>/dev/null || true)
+        [[ "$code" == "200" ]] && return 0
+        sleep 2
+    done
+    return 1
+}
+
+up() {
+    preflight
+    build_app
+
+    banner "Starting 5 GemFire regions (${GEMFIRE_IMAGE})"
+    # region1 owns the shared 'gemfire-cache' network — start it first
+    log "Starting ${REGION_NAMES[0]} (creates shared network)..."
+    dq -f "docker/${REGION_NAMES[0]}/compose.yaml" up -d --wait
+    local name
+    for name in "${REGION_NAMES[@]:1}"; do
+        log "Starting ${name}..."
+        dq -f "docker/${name}/compose.yaml" up -d
+    done
+
+    banner "Waiting for all region REST APIs (gemfire-api ping)"
+    local i
+    for i in "${!REGION_NAMES[@]}"; do
+        if wait_for_region "${REGION_PORTS[$i]}" "${REGION_NAMES[$i]}"; then
+            ok "${REGION_NAMES[$i]} ready on :${REGION_PORTS[$i]}"
+        else
+            warn "${REGION_NAMES[$i]} did not become ready - continuing anyway"
+        fi
+    done
+
+    banner "Waiting for the Account region on all regions"
+    for i in "${!REGION_NAMES[@]}"; do
+        if wait_for_account_region "${REGION_PORTS[$i]}"; then
+            ok "${REGION_NAMES[$i]} Account region is writable"
+        else
+            warn "${REGION_NAMES[$i]} Account region not detected - continuing anyway"
+        fi
+    done
+
+    banner "Starting monitoring stack (Prometheus / Grafana / GemFire console)"
+    dq -f docker/monitoring/compose.yaml up -d || warn "Monitoring did not fully start — demo still works without it"
+
+    start_toxiproxy
+    start_app
+    ok "Global LB:      http://localhost:${APP_PORT}/account (Spring Cloud Gateway)"
+    ok "Live dashboard: http://localhost:${APP_PORT}/"
+    ok "Grafana:        http://localhost:3000 (admin/admin)"
+    ok "GemFire console: http://localhost:7070"
+    banner "World is UP"
+}
+
+# Toxiproxy: real latency between the global LB and the remote regions (2-5)
+start_toxiproxy() {
+    banner "Starting Toxiproxy (distance to regions 2-5)"
+    dq -f docker/toxiproxy/compose.yaml up -d
+    local i
+    for i in $(seq 1 30); do
+        curl -sf -o /dev/null --max-time 1 "http://localhost:${TOXI_API}/version" && break
+        sleep 1
+    done
+    for i in "${!REGION_NAMES[@]}"; do
+        local name="${REGION_NAMES[$i]}" ms="${REGION_LATENCY_MS[$i]}"
+        (( ms > 0 )) || continue
+        # replace any previous toxic so re-runs stay idempotent
+        curl -s -o /dev/null -X DELETE "http://localhost:${TOXI_API}/proxies/${name}/toxics/distance" || true
+        curl -sf -o /dev/null -X POST "http://localhost:${TOXI_API}/proxies/${name}/toxics" \
+            -H 'Content-Type: application/json' \
+            -d "{\"name\":\"distance\",\"type\":\"latency\",\"stream\":\"downstream\",\"attributes\":{\"latency\":${ms},\"jitter\":5}}" \
+            && ok "${name}: +${ms} ms" || warn "Could not add latency to ${name}"
+    done
+}
+
+app_ready() {
+    curl -sf --max-time 2 "http://localhost:$1/actuator/health" 2>/dev/null | grep -q '"status":"UP"'
+}
+
+# Launch one JVM detached, with its own log and pidfile under $RUN_DIR
+launch() {
+    local name="$1"; shift
+    use_app_java || return 1
+    stop_proc "$name"
+    : > "${RUN_DIR}/${name}.log"
+    nohup "$JAVA_HOME/bin/java" "$@" > "${RUN_DIR}/${name}.log" 2>&1 &
+    local pid=$!
+    echo "$pid" > "${RUN_DIR}/${name}.pid"
+    disown "$pid" 2>/dev/null || true
+}
+
+wait_for_app() {
+    local name="$1" port="$2" i
+    for i in $(seq 1 90); do
+        if app_ready "$port"; then ok "${name} ready on :${port}"; return 0; fi
+        sleep 1
+    done
+    warn "${name} did not become ready on :${port}; last log lines:"
+    tail -20 "${RUN_DIR}/${name}.log" >&2 || true
+    return 1
+}
+
+# The same jar, once per region, pointed at that region's own GemFire
+start_region_app() {
+    local i="$1"
+    launch "${REGION_NAMES[$i]}" -jar "$APP_JAR" \
+        --server.port="${REGION_APP_PORTS[$i]}" \
+        --region.name="${REGION_NAMES[$i]}" \
+        --region.gemfire-url="http://localhost:${REGION_PORTS[$i]}"
+}
+
+start_app() {
+    banner "Starting the regional apps (one per region) and the global load balancer"
+    stop_app || true
+    local i
+    for i in "${!REGION_NAMES[@]}"; do start_region_app "$i"; done
+    launch gateway -jar "$GATEWAY_JAR"
+    for i in "${!REGION_NAMES[@]}"; do
+        wait_for_app "${REGION_NAMES[$i]}" "${REGION_APP_PORTS[$i]}" || true
+    done
+    wait_for_app "gateway" "$APP_PORT"
+    warm_up "${!REGION_NAMES[@]}"
+}
+
+# Fresh JVMs and cold connections make the first requests slow. Warm each app
+# directly, then the gateway's connection pools; X-Warmup keeps it off the dashboard.
+warm_up() {
+    local i n
+    log "Warming up (JIT + connections)..."
+    for i in "$@"; do
+        for n in $(seq 1 25); do
+            curl -s -o /dev/null --max-time 3 -X POST "http://localhost:${REGION_APP_PORTS[$i]}/account" \
+                -H 'Content-Type: application/json' -d "{\"id\":\"warmup-${n}\",\"name\":\"warmup\",\"balance\":0}" || true
+        done
+    done
+    for n in $(seq 1 40); do
+        curl -s -o /dev/null --max-time 3 -X POST "http://localhost:${APP_PORT}/account" -H 'X-Warmup: true' \
+            -H 'Content-Type: application/json' -d "{\"id\":\"warmup-${n}\",\"name\":\"warmup\",\"balance\":0}" || true
+    done
+    ok "Warm"
+}
+
+# Wait until the global LB's health checks agree with us about a region
+wait_for_gateway_view() {
+    local name="$1" want="$2" i
+    for i in $(seq 1 30); do
+        if curl -s --max-time 2 "http://localhost:${APP_PORT}/sites" 2>/dev/null \
+            | python3 -c "import json,sys; s={r['name']:r['healthy'] for r in json.load(sys.stdin)}; sys.exit(0 if s.get('$name')==$want else 1)" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+# =============================================================================
+# REGION DESTROY / RESTORE (the on-stage commands)
+# =============================================================================
+region_destroy() {
+    local name port
+    name=$(resolve_region "${1:-}" ) || { err "Unknown region '${1:-}'. Valid: ${REGION_NAMES[*]} (or 1-5)"; exit 1; }
+    port=$(region_find_port "$name") || port="?"
+
+    banner "Destroying region ${name} (${port})"
+    if ! dq -f "docker/${name}/compose.yaml" ps -q | grep -q .; then
+        warn "${name} is not currently running — nothing to destroy"
+        return 0
+    fi
+    # the whole region goes: its app and its data grid
+    stop_proc "$name"
+    # stop (not down) keeps the shared 'gemfire-cache' network and named volumes
+    dq -f "docker/${name}/compose.yaml" stop
+    warn "${name} stopped. The global load balancer must route around it."
+    ok "Destroyed: ${name}"
+}
+
+region_restore() {
+    local name port
+    name=$(resolve_region "${1:-}" ) || { err "Unknown region '${1:-}'. Valid: ${REGION_NAMES[*]} (or 1-5)"; exit 1; }
+    port=$(region_find_port "$name") || port="?"
+
+    banner "Restoring region ${name} (${port})"
+    dq -f "docker/${name}/compose.yaml" up -d
+
+    banner "Waiting for ${name} REST API to come back..."
+    wait_for_region "$port" "$name" 90 || warn "${name} ping not ready yet"
+
+    banner "Waiting for ${name} to recreate the Account region..."
+    local i code
+    for i in $(seq 1 60); do
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://localhost:${port}/gemfire-api/v1/Account" 2>/dev/null || true)
+        [[ "$code" == "200" ]] && break
+        sleep 2
+    done
+    if [[ "$code" == "200" ]]; then
+        ok "${name} Account region is writable again"
+    else
+        warn "${name} Account region probe did not return 200 (got ${code:-}) - continuing"
+    fi
+
+    local idx
+    for idx in "${!REGION_NAMES[@]}"; do [[ "${REGION_NAMES[$idx]}" == "$name" ]] && break; done
+    banner "Starting the ${name} app"
+    start_region_app "$idx"
+    wait_for_app "$name" "${REGION_APP_PORTS[$idx]}" || true
+
+    log "Waiting for the global load balancer to mark ${name} UP..."
+    wait_for_gateway_view "$name" True && ok "Global LB sees ${name} UP" || warn "Global LB has not marked ${name} UP yet"
+    warm_up "$idx"
+    ok "Restored: ${name}"
+}
+
+valid_region() {
+    local name="$1" r
+    for r in "${REGION_NAMES[@]}"; do
+        [[ "$r" == "$name" ]] && return 0
+    done
+    return 1
+}
+
+# Accept either a region name ("region1") or its 1-based number ("1").
+resolve_region() {
+    local arg="$1"
+    if valid_region "$arg"; then
+        echo "$arg"
+        return 0
+    fi
+    if [[ "$arg" =~ ^[1-5]$ ]]; then
+        echo "${REGION_NAMES[$((arg - 1))]}"
+        return 0
+    fi
+    return 1
+}
+
+region_find_port() {
+    local name="$1" i
+    for i in "${!REGION_NAMES[@]}"; do
+        if [[ "${REGION_NAMES[$i]}" == "$name" ]]; then
+            echo "${REGION_PORTS[$i]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# =============================================================================
+# STATUS
+# =============================================================================
+status() {
+    banner "Region status"
+    echo -e "${CYAN}${WHITE}REGION     PORT   COMPOSE   REST_API   ACCOUNT${NC}"
+    echo "-----------------------------------------------------"
+    local i name port ps ready acc running
+    for i in "${!REGION_NAMES[@]}"; do
+        name="${REGION_NAMES[$i]}"
+        port="${REGION_PORTS[$i]}"
+        if dq -f "docker/${name}/compose.yaml" ps -q | grep -q .; then
+            ps="down"
+            running=$(dq -f "docker/${name}/compose.yaml" ps -q | while read -r c; do
+                docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null | grep -q true && echo up
+            done | grep -c up)
+            if [[ "${running:-0}" -ge 2 ]]; then ps="up"; fi
+        else
+            ps="off"
+        fi
+        ready="—"
+        region_ready "$port" && ready="UP"
+        acc="—"
+        if [[ "$ready" == "UP" ]]; then
+            local code
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://localhost:${port}/gemfire-api/v1/Account" 2>/dev/null || true)
+            [[ "$code" == "200" ]] && acc="writable" || acc="creating"
+        fi
+        color="$GREEN"; [[ "$ready" != "UP" ]] && color="$RED"
+        printf "%-10s %-5s %-8s %b%-9s%b %-12s\n" \
+            "$name" "$port" "$ps" "$color" "$ready" "$NC" "$acc"
+    done
+
+    banner "Regional apps"
+    for i in "${!REGION_NAMES[@]}"; do
+        if app_ready "${REGION_APP_PORTS[$i]}"; then
+            printf "%-10s :%-5s %bUP%b\n" "${REGION_NAMES[$i]}" "${REGION_APP_PORTS[$i]}" "$GREEN" "$NC"
+        else
+            printf "%-10s :%-5s %bDOWN%b\n" "${REGION_NAMES[$i]}" "${REGION_APP_PORTS[$i]}" "$RED" "$NC"
+        fi
+    done
+
+    banner "Global load balancer (:${APP_PORT})"
+    if app_ready "$APP_PORT"; then
+        ok "Gateway is UP"
+        show_sites_table
+    else
+        warn "Gateway is not running (or not ready)"
+    fi
+}
+
+# =============================================================================
+# DOWN
+# =============================================================================
+down() {
+    banner "Tearing down the whole world"
+    stop_app || true
+    dq -f docker/monitoring/compose.yaml down --remove-orphans -v 2>/dev/null || true
+    dq -f docker/toxiproxy/compose.yaml down --remove-orphans 2>/dev/null || true
+    local name
+    for name in "${REGION_NAMES[@]}"; do
+        dq -f "docker/${name}/compose.yaml" down --remove-orphans -v 2>/dev/null || true
+    done
+    docker network rm gemfire-cache 2>/dev/null || true
+    if docker volume ls -q | grep -q publish-demo; then
+        docker volume rm $(docker volume ls -q | grep publish-demo) 2>/dev/null || true
+    fi
+    ok "World is down"
+}
+
+# =============================================================================
+# DEMO (scripted full run with the live terminal panel)
+# =============================================================================
+render_panel() {
+    local d
+    d=$(curl -s --max-time 2 "http://localhost:${APP_PORT}/dashboard" 2>/dev/null || true)
+    if [[ -z "$d" ]]; then echo "waiting for dashboard data..."; return; fi
+    DASH_JSON="$d" python3 <<'PY'
+import os, json
+d = json.loads(os.environ.get("DASH_JSON", "{}"))
+G="\033[1;32m"; R="\033[1;31m"; Y="\033[1;33m"; C="\033[1;36m"; W="\033[1;37m"; N="\033[0m"
+mode=d.get("mode","?")
+print(f"{W}GemFire Multi-Region Active-Active  global load balancer{N}")
+print(f"mode: {G if mode=='NORMAL' else Y}{mode}{N}")
+print()
+print(f"{C}{'REGION':<10}{'HEALTH':<8}{'WRITES':>8}{'AVG_MS':>9}{'SIM_MS':>8}{N}")
+print("-"*48)
+for r in d.get("regions", []):
+    h=r.get("healthy"); health=f"{G}UP{N}" if h else f"{R}DOWN{N}"
+    print(f"{r.get('name','?'):<10}{health:<8}{r.get('writes',0):>8}{r.get('avgLatencyMs',0):>9}{r.get('latencyMs',0):>8}")
+s=d.get("summary",{})
+print("-"*48)
+print(f"{W}TOTAL{'':<7}{s.get('totalWrites',0):>8}   avg {s.get('avgLatencyMs',0)}ms{N}")
+print()
+print(f"{C}last events{N}")
+for e in d.get("events",[])[-6:]:
+    t=e.get("type",""); col=G if t=="UP" else (R if t=="DOWN" else (Y if t=="FAILOVER" else ""))
+    print(f"  {e.get('region','?'):<10}{col}{t:<10}{N}{e.get('latencyMs',0)}ms")
+PY
+}
+
+live_watch() {
+    local seconds="${1:-5}" i
+    if ! is_tty; then log "Skipping live panel (not a TTY)"; sleep "$seconds"; return; fi
+    for i in $(seq 1 "$seconds"); do render_panel; sleep 1; done
+}
+
+write_one() {
+    local id="$1"
+    if ! curl -sf --max-time 20 -D "$TMPH" -o /dev/null -X POST "http://localhost:${APP_PORT}/account" \
+        -H 'Content-Type: application/json' -d "{\"id\":\"$id\",\"name\":\"Customer $id\",\"balance\":100}"; then
+        err "Write for $id failed (HTTP or transport error)"
+        return 1
+    fi
+    local region lat
+    region=$(grep -i '^X-Region:' "$TMPH" | tr -d '\r' | awk '{print $2}')
+    lat=$(grep -i '^X-Latency-Ms:' "$TMPH" | tr -d '\r' | awk '{print $2}')
+    if ! valid_region "$region" || [[ ! "$lat" =~ ^[0-9]+$ ]]; then
+        err "Write for $id returned incomplete region/latency evidence"
+        return 1
+    fi
+    echo "$region $lat"
+}
+
+write_batch() {
+    local label="$1" count="${2:-10}" prefix="${3:-acct}"
+    if [[ ! "$count" =~ ^[1-9][0-9]*$ ]]; then
+        err "Write count must be a positive integer"
+        return 1
+    fi
+    banner "Writing ${count} accounts - ${label}"
+    local -A dist=() tot=()
+    local region lat i line start elapsed succeeded=0 failed=0
+    start=$(date +%s%N)
+    for i in $(seq 1 "$count"); do
+        if ! line=$(write_one "${prefix}-${i}"); then
+            failed=$((failed + 1))
+            continue
+        fi
+        region=$(echo "$line" | awk '{print $1}')
+        lat=$(echo "$line" | awk '{print $2}')
+        dist[$region]=$(( ${dist[$region]:-0} + 1 ))
+        tot[$region]=$(( ${tot[$region]:-0} + lat ))
+        succeeded=$((succeeded + 1))
+    done
+    elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
+    local r n avg
+    for r in "${REGION_NAMES[@]}"; do
+        n="${dist[$r]:-0}"
+        if [[ "$n" -gt 0 ]]; then avg=$(( ${tot[$r]} / n )); printf "  %-10s %4d writes   avg latency %4d ms\n" "$r" "$n" "$avg"; fi
+    done
+    printf "  TOTAL       %d succeeded / %d attempted; %d failed or unverified; total %d ms\n" "$succeeded" "$count" "$failed" "$elapsed"
+    echo ""
+    [[ "$failed" -eq 0 ]]
+}
+
+# A fresh key written only while the target is down makes catch-up observable.
+recovery_mark() {
+    local name idx id region lat
+    name=$(resolve_region "${1:-1}") || { err "Unknown region"; return 1; }
+    # Invalidate any previous run even when this new attempt fails its checks.
+    : > "${RUN_DIR}/recovery-${name}.id"
+    for idx in "${!REGION_NAMES[@]}"; do [[ "${REGION_NAMES[$idx]}" == "$name" ]] && break; done
+    if app_ready "${REGION_APP_PORTS[$idx]}"; then
+        err "${name} is still healthy. Destroy it before creating the recovery proof."
+        return 1
+    fi
+    if ! wait_for_gateway_view "$name" False; then
+        err "Gateway has not confirmed ${name} DOWN; no proof created"
+        return 1
+    fi
+    id="recovery-$(python3 -c 'import uuid; print(uuid.uuid4())')" || return 1
+    local line
+    line=$(write_one "$id") || return 1
+    read -r region lat <<< "$line"
+    if [[ "$region" == "$name" ]]; then
+        err "Proof unexpectedly landed in ${name}; repeat after confirming it is down"
+        return 1
+    fi
+    printf '%s\n' "$id" > "${RUN_DIR}/recovery-${name}.id"
+    ok "${name} is DOWN. Created ${id} through ${region} (${lat} ms)."
+    log "After restore: ./world recovery-check ${name}"
+}
+
+recovery_check() {
+    local name idx id body attempt
+    name=$(resolve_region "${1:-1}") || { err "Unknown region"; return 1; }
+    id=$(cat "${RUN_DIR}/recovery-${name}.id" 2>/dev/null) || true
+    if [[ ! "$id" =~ ^recovery-[0-9a-f-]+$ ]]; then
+        err "No recovery proof for ${name}. Run recovery-mark while it is down."
+        return 1
+    fi
+    for idx in "${!REGION_NAMES[@]}"; do [[ "${REGION_NAMES[$idx]}" == "$name" ]] && break; done
+    log "Reading ${id} directly from ${name} on :${REGION_APP_PORTS[$idx]} (no gateway)"
+    for attempt in $(seq 1 15); do
+        if body=$(curl -sf --max-time 2 "http://localhost:${REGION_APP_PORTS[$idx]}/account/${id}"); then
+            if printf '%s' "$body" | python3 -c 'import json,sys; a=json.load(sys.stdin); key=sys.argv[1]; sys.exit(0 if a.get("id")==key and a.get("name")=="Customer "+key and a.get("balance")==100 else 1)' "$id"; then
+                ok "CATCH-UP VERIFIED: ${name} has the account created during its outage."
+                printf '%s' "$body" | python3 -m json.tool
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+    err "Catch-up NOT verified for ${name}; the proof account is missing or differs"
+    return 1
+}
+
+show_app_log_tail() {
+    log "Recent application log (failover / retry / recovery):"
+    grep -aE "Region \[" "$APP_LOG" | tail -25 || true
+}
+
+demo() {
+    preflight
+    build_app
+    if ! curl -sf --max-time 2 "http://localhost:${APP_PORT}/actuator/health" 2>/dev/null | grep -q '"status":"UP"'; then
+        log "World not up yet — bringing it up first"
+        up
+    else
+        log "World already up"
+    fi
+
+    banner "STARTING THE LIVE DEMO"
+
+    show_sites
+
+    write_batch "NORMAL (fast region preferred)" 12 normal
+    live_watch 5
+
+    region_destroy "$FAST_REGION"
+    write_batch "FAILOVER (retrying past the dead fast region)" 6 failover
+    show_app_log_tail
+
+    log "Watching the global load balancer mark ${FAST_REGION} DOWN..."
+    live_watch 8
+    show_sites
+
+    write_batch "DEGRADED (all writes to slow regions)" 12 degraded
+    recovery_mark "$FAST_REGION"
+    live_watch 3
+
+    region_restore "$FAST_REGION"
+    log "Watching the global load balancer mark ${FAST_REGION} UP..."
+    live_watch 8
+    write_batch "RECOVERED (fast region is back)" 12 recovered
+    recovery_check "$FAST_REGION"
+    show_sites
+    show_app_log_tail
+
+    banner "Demo complete"
+    echo "  - Live dashboard: http://localhost:${APP_PORT}/"
+    echo "  - Global LB view: http://localhost:${APP_PORT}/sites"
+}
+
+show_sites_table() {
+    local d
+    d=$(curl -s --max-time 2 "http://localhost:${APP_PORT}/sites" 2>/dev/null || true)
+    if [[ -z "$d" ]]; then warn "Could not read /sites from the gateway"; return; fi
+    SITES_JSON="$d" python3 <<'PY'
+import os, json
+G="\033[1;32m"; R="\033[1;31m"; C="\033[1;36m"; N="\033[0m"
+print(f"{C}{'REGION':<10}{'HEALTH':<8}{'WEIGHT':>7}{'DISTANCE':>10}{N}")
+for r in json.loads(os.environ["SITES_JSON"]):
+    health = f"{G}UP  {N}" if r["healthy"] else f"{R}DOWN{N}"
+    distance = f"{r['latencyMs']} ms"
+    print(f"{r['name']:<10}{health}    {r['weight']:>7}{distance:>10}")
+PY
+}
+
+show_sites() {
+    banner "Global load balancer view of the regions (GET /sites)"
+    show_sites_table
+}
+
+# =============================================================================
+# HELP
+# =============================================================================
+usage() {
+    cat <<'EOF'
+Multi-Region Active-Active GemFire Demo — JCON USA 2026
+
+Usage: ./world <command> [args]
+
+  pull                pre-pull every image (prep step, so up works offline)
+  up                  bring the whole world up (pre-flight, build, regions, monitor, app)
+  status              show a table of regions, health, ports, and the writer app
+  region-destroy N    stop region N (e.g. ./world region-destroy 1)
+  region-restore N    rebuild region N and watch it recover
+  recovery-mark N     create a fresh proof account while region N is down
+  recovery-check N    read that account directly from restored region N
+  demo                scripted full run with a live terminal panel
+  down                tear the whole world down (volumes included)
+  help                show this message
+EOF
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    cmd="${1:-help}"
+    shift || true
+    case "$cmd" in
+        pull)               pull ;;
+        up)                 up "$@" ;;
+        status)             status "$@" ;;
+        region-destroy)     region_destroy "${1:-}" ;;
+        region-restore)     region_restore "${1:-}" ;;
+        recovery-mark)      recovery_mark "${1:-1}" ;;
+        recovery-check)     recovery_check "${1:-1}" ;;
+        demo)               demo "$@" ;;
+        down)               down "$@" ;;
+        help|-h|--help)     usage ;;
+        *)                  err "Unknown command '${cmd}'"; usage; exit 1 ;;
+    esac
+fi

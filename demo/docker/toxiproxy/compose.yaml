@@ -1,0 +1,16 @@
+# Toxiproxy puts real network distance between the global load balancer and the
+# "remote" regions. region1 is local (no proxy); regions 2-5 are reached through
+# 18082-18085, which forward to the regional apps on the host (8082-8085).
+# ./world adds the latency toxics through the API on :8474 after startup.
+services:
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    container_name: toxiproxy
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes:
+      - ./toxiproxy.json:/config/toxiproxy.json:ro
+    ports:
+      - "8474:8474"
+      - "18082-18085:18082-18085"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

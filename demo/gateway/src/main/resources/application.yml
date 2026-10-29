@@ -1,0 +1,64 @@
+# Spring Cloud Gateway as the global load balancer ("global DNS") for five regions.
+# Every region runs the same app. region1 is local; regions 2-5 sit behind
+# Toxiproxy (18082-18085), which adds real network latency to stand in for distance.
+server:
+  port: 8080
+
+spring:
+  application:
+    name: global-lb
+  cloud:
+    discovery:
+      client:
+        simple:
+          instances:
+            regions:
+              - instance-id: region1
+                uri: http://localhost:8081
+                metadata: { region: region1, weight: "10", latency-ms: "0" }
+              - instance-id: region2
+                uri: http://localhost:18082
+                metadata: { region: region2, weight: "1", latency-ms: "150" }
+              - instance-id: region3
+                uri: http://localhost:18083
+                metadata: { region: region3, weight: "1", latency-ms: "250" }
+              - instance-id: region4
+                uri: http://localhost:18084
+                metadata: { region: region4, weight: "1", latency-ms: "200" }
+              - instance-id: region5
+                uri: http://localhost:18085
+                metadata: { region: region5, weight: "1", latency-ms: "300" }
+    loadbalancer:
+      health-check:
+        # a region whose /actuator/health is not UP leaves rotation within a second
+        interval: 1s
+        initial-delay: 0
+        path:
+          default: /actuator/health
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: regions
+              uri: lb://regions
+              predicates:
+                - Path=/account/**
+              filters:
+                # a request that fails in one region is retried, and lands in another
+                - name: Retry
+                  args:
+                    retries: 5
+                    methods: GET,POST,PUT
+                    statuses: BAD_GATEWAY,SERVICE_UNAVAILABLE,GATEWAY_TIMEOUT
+                    exceptions: java.io.IOException,java.util.concurrent.TimeoutException
+                    backoff:
+                      firstBackoff: 200ms
+                      maxBackoff: 2s
+                      factor: 2
+                      basedOnPreviousValue: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,gateway

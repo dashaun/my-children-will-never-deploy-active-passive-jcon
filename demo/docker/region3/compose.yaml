@@ -1,0 +1,106 @@
+
+networks:
+  gemfire-cache:
+    external: true
+
+services:
+  # ============================================
+  # Cluster 3 - Locator
+  # ============================================
+  gf3-locator:
+    image: gemfire/gemfire-all:10.3-jdk25
+    container_name: gf3-locator
+    networks:
+      - gemfire-cache
+    environment:
+      - ACCEPT_TERMS=y
+    command: >
+      gfsh start locator
+      --name=gf3-locator
+      --enable-cluster-configuration=true
+      --connect=false
+      --max-heap=512m
+      --initial-heap=512m
+      --J=-Dgemfire.distributed-system-id=3
+      --J=-Dgemfire.remote-locators=gf1-locator[10334],gf2-locator[10334],gf4-locator[10334],gf5-locator[10334]
+      --J=-Dgemfire.prometheus.metrics.emission=Default
+      --J=-Dgemfire.prometheus.metrics.port=7777
+      --J=-Duser.timezone=Asia/Kolkata
+      --J=-Dgemfire.prometheus.metrics.interval=15s
+    healthcheck:
+      test: ["CMD", "gfsh", "-e", "connect --locator=gf3-locator[10334]"]
+      interval: 10s
+      timeout: 20s
+      retries: 12
+      start_period: 20s
+
+  # ============================================
+  # Cluster 3 - Server
+  # ============================================
+  gf3-server:
+    image: gemfire/gemfire-all:10.3-jdk25
+    container_name: gf3-server
+    networks:
+      - gemfire-cache
+    environment:
+      - ACCEPT_TERMS=y
+    command: >
+      gfsh start server
+      --name=gf3-server
+      --use-cluster-configuration=true
+      --locators=gf3-locator[10334]
+      --start-rest-api
+      --http-service-port=7070
+      --http-service-bind-address=0.0.0.0
+      --max-heap=512m
+      --initial-heap=512m
+      --J=-Dgemfire.distributed-system-id=3
+      --J=-Dgemfire.prometheus.metrics.emission=Default
+      --J=-Dgemfire.prometheus.metrics.port=7777
+      --J=-Duser.timezone=Asia/Kolkata
+      --J=-Dgemfire.prometheus.metrics.interval=15s
+    ports:
+      - "7073:7070"
+    depends_on:
+      gf3-locator:
+        condition: service_healthy
+
+  # ============================================
+  # Cluster 3 - Configuration
+  # ============================================
+  gf3-config:
+    image: gemfire/gemfire-all:10.3-jdk25
+    container_name: gf3-config
+    networks:
+      - gemfire-cache
+    depends_on:
+      gf3-server:
+        condition: service_started
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "Waiting for Cluster 3 to be ready..."
+        sleep 10
+        
+        echo "Configuring PDX on Cluster 3..."
+        gfsh -e "connect --locator=gf3-locator[10334]" \
+             -e "configure pdx --read-serialized=true --disk-store"
+        
+        echo "Setting up WAN gateway receiver on Cluster 3..."
+        gfsh -e "connect --locator=gf3-locator[10334]" \
+             -e "create gateway-receiver"
+        
+        echo "Setting up WAN gateway senders on Cluster 3..."
+        gfsh -e "connect --locator=gf3-locator[10334]" \
+             -e "create gateway-sender --id=Account_Sender_to_1 --parallel=true --remote-distributed-system-id=1 --enable-persistence=true --enable-batch-conflation=true" \
+             -e "create gateway-sender --id=Account_Sender_to_2 --parallel=true --remote-distributed-system-id=2 --enable-persistence=true --enable-batch-conflation=true" \
+             -e "create gateway-sender --id=Account_Sender_to_4 --parallel=true --remote-distributed-system-id=4 --enable-persistence=true --enable-batch-conflation=true" \
+             -e "create gateway-sender --id=Account_Sender_to_5 --parallel=true --remote-distributed-system-id=5 --enable-persistence=true --enable-batch-conflation=true"
+        
+        echo "Creating regions on Cluster 3..."
+        gfsh -e "connect --locator=gf3-locator[10334]" \
+             -e "create region --name=Account --type=PARTITION --gateway-sender-id=Account_Sender_to_1,Account_Sender_to_2,Account_Sender_to_4,Account_Sender_to_5" \
+             -e "create region --name=health3 --type=PARTITION"
+        
+        echo "Cluster 3 configuration complete!"

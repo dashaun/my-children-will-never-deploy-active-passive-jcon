@@ -1,0 +1,4 @@
+demo/target/
+.DS_Store
+*.pid
+*.log

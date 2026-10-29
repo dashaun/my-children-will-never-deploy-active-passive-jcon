@@ -1,0 +1,6 @@
+[
+  { "name": "region2", "listen": "0.0.0.0:18082", "upstream": "host.docker.internal:8082", "enabled": true },
+  { "name": "region3", "listen": "0.0.0.0:18083", "upstream": "host.docker.internal:8083", "enabled": true },
+  { "name": "region4", "listen": "0.0.0.0:18084", "upstream": "host.docker.internal:8084", "enabled": true },
+  { "name": "region5", "listen": "0.0.0.0:18085", "upstream": "host.docker.internal:8085", "enabled": true }
+]

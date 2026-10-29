@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc">
+  <title id="title">Active-passive versus five-region active-active</title>
+  <desc id="desc">Active-passive routes normal traffic to region 1 and switches to standby region 2 after failure. Active-active routes traffic to all five regions, each with its own application and data, with asynchronous replication between peers.</desc>
+  <defs>
+    <marker id="teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#2DD4BF"/></marker>
+    <marker id="amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#FBBF24"/></marker>
+    <marker id="muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#93A8C4"/></marker>
+  </defs>
+  <g font-family="Source Sans 3, Segoe UI, sans-serif" text-anchor="middle" fill="#EAF2FC">
+    <text x="220" y="34" font-size="34" font-weight="800">Active-passive</text>
+    <text x="830" y="34" font-size="34" font-weight="800">Active-active</text>
+    <path d="M465 15V420" stroke="#223350" stroke-width="2"/>
+    <g fill="#111C2F" stroke="#93A8C4" stroke-width="2">
+      <rect x="100" y="64" width="240" height="58" rx="8"/>
+      <rect x="670" y="64" width="320" height="58" rx="8"/>
+    </g>
+    <text x="220" y="101" font-size="26">Traffic routing</text>
+    <text x="830" y="101" font-size="26">Global load balancer</text>
+    <path d="M170 122V156H110V211" fill="none" stroke="#2DD4BF" stroke-width="3" marker-end="url(#teal)"/>
+    <path d="M270 122V156H335V211" fill="none" stroke="#FBBF24" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#amber)"/>
+    <text x="104" y="192" font-size="23" fill="#2DD4BF">Normal traffic</text>
+    <text x="339" y="192" font-size="23" fill="#FBBF24">On failover</text>
+    <g fill="#111C2F" stroke-width="2">
+      <rect x="15" y="220" width="190" height="112" rx="8" stroke="#2DD4BF"/>
+      <rect x="240" y="220" width="190" height="112" rx="8" stroke="#FBBF24" stroke-dasharray="8 6"/>
+    </g>
+    <g font-size="26" font-weight="700"><text x="110" y="252">Region 1</text><text x="335" y="252">Region 2</text></g>
+    <g font-size="24"><text x="110" y="285" fill="#2DD4BF">ACTIVE</text><text x="335" y="285" fill="#FBBF24">STANDBY</text></g>
+    <g font-size="22" fill="#93A8C4"><text x="110" y="315">App + data</text><text x="335" y="315">App + data</text></g>
+    <path d="M110 332V360H335V338" fill="none" stroke="#93A8C4" stroke-width="2" marker-end="url(#muted)"/>
+    <text x="220" y="389" font-size="23" fill="#93A8C4">Replicate to standby</text>
+    <text x="220" y="421" font-size="24" fill="#FBBF24">Promote standby after failure</text>
+    <path d="M830 122V155M550 155H1110" fill="none" stroke="#2DD4BF" stroke-width="3"/>
+    <g fill="none" stroke="#2DD4BF" stroke-width="3" marker-end="url(#teal)">
+      <path d="M550 155V211"/><path d="M690 155V211"/><path d="M830 155V211"/><path d="M970 155V211"/><path d="M1110 155V211"/>
+    </g>
+    <g fill="#111C2F" stroke="#2DD4BF" stroke-width="2">
+      <rect x="490" y="220" width="120" height="112" rx="8"/>
+      <rect x="630" y="220" width="120" height="112" rx="8"/>
+      <rect x="770" y="220" width="120" height="112" rx="8"/>
+      <rect x="910" y="220" width="120" height="112" rx="8"/>
+      <rect x="1050" y="220" width="120" height="112" rx="8"/>
+    </g>
+    <g font-size="25" font-weight="700"><text x="550" y="252">Region 1</text><text x="690" y="252">Region 2</text><text x="830" y="252">Region 3</text><text x="970" y="252">Region 4</text><text x="1110" y="252">Region 5</text></g>
+    <g font-size="23" fill="#2DD4BF"><text x="550" y="285">ACTIVE</text><text x="690" y="285">ACTIVE</text><text x="830" y="285">ACTIVE</text><text x="970" y="285">ACTIVE</text><text x="1110" y="285">ACTIVE</text></g>
+    <g font-size="21" fill="#93A8C4"><text x="550" y="315">App + data</text><text x="690" y="315">App + data</text><text x="830" y="315">App + data</text><text x="970" y="315">App + data</text><text x="1110" y="315">App + data</text></g>
+    <path d="M550 332V360H1110V332M690 332V360M830 332V360M970 332V360" fill="none" stroke="#93A8C4" stroke-width="2"/>
+    <text x="830" y="389" font-size="23" fill="#93A8C4">Asynchronous replication between peers</text>
+    <text x="830" y="421" font-size="24" fill="#2DD4BF">Route around an unhealthy region</text>
+  </g>
+</svg>

@@ -1,0 +1,37 @@
+# rcfile for the live shell docked under the demo slides (cwd: demo/).
+# Pulls in ./world's functions without running it, so the stage shell can
+# drive real traffic with `writes N` between the one-command steps.
+
+# keep the presenter's PATH tools (docker, sdkman java) available
+[[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
+
+STAGE_DIR="$PWD"
+source ./world
+# ./world uses `set -euo pipefail`; the interactive stage shell must survive errors.
+cd "$STAGE_DIR"
+set +euo pipefail
+trap - EXIT
+
+alias world=./world
+
+# writes N  — send N account writes through the global load balancer
+#             and print where they landed (region, count, avg latency)
+WRITES_RUN=0
+writes() {
+    WRITES_RUN=$((WRITES_RUN + 1))
+    write_batch "live traffic" "${1:-12}" "live${WRITES_RUN}"
+}
+
+# the on-stage commands, so ↑ finds them even if the deck pre-type is skipped
+history -c
+history -s ./world status
+history -s writes 12
+history -s ./world region-destroy 1 \&\& writes 6
+history -s writes 12
+history -s ./world recovery-mark 1
+history -s ./world region-restore 1
+history -s writes 12
+history -s ./world recovery-check 1
+
+PS1='\[\e[1;36m\]demo\[\e[0m\] \[\e[1;32m\]$\[\e[0m\] '
+clear

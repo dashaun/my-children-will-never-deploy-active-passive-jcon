@@ -1,0 +1,107 @@
+
+networks:
+  gemfire-cache:
+    external: true
+
+services:
+  # ============================================
+  # Cluster 3 - Locator
+  # ============================================
+  gf4-locator:
+    image: gemfire/gemfire-all:10.3-jdk25
+    container_name: gf4-locator
+    networks:
+      - gemfire-cache
+    environment:
+      - ACCEPT_TERMS=y
+    command: >
+      gfsh start locator
+      --name=gf4-locator
+      --enable-cluster-configuration=true
+      --connect=false
+      --max-heap=512m
+      --initial-heap=512m
+      --J=-Dgemfire.distributed-system-id=4
+      --J=-Dgemfire.remote-locators=gf1-locator[10334],gf2-locator[10334],gf3-locator[10334],gf5-locator[10334]
+      --J=-Dgemfire.prometheus.metrics.emission=Default
+      --J=-Dgemfire.prometheus.metrics.port=7777
+      --J=-Duser.timezone=America/Sao_Paulo
+      --J=-Dgemfire.prometheus.metrics.interval=15s
+    healthcheck:
+      test: ["CMD", "gfsh", "-e", "connect --locator=gf4-locator[10334]"]
+      interval: 10s
+      timeout: 20s
+      retries: 12
+      start_period: 20s
+
+  # ============================================
+  # Cluster 3 - Server
+  # ============================================
+  gf4-server:
+    image: gemfire/gemfire-all:10.3-jdk25
+    container_name: gf4-server
+    networks:
+      - gemfire-cache
+    environment:
+      - ACCEPT_TERMS=y
+    command: >
+      gfsh start server
+      --name=gf4-server
+      --use-cluster-configuration=true
+      --locators=gf4-locator[10334]
+      --start-rest-api
+      --http-service-port=7070
+      --http-service-bind-address=0.0.0.0
+      --max-heap=512m
+      --initial-heap=512m
+      --J=-Dgemfire.distributed-system-id=4
+      --J=-Dgemfire.prometheus.metrics.emission=Default
+      --J=-Dgemfire.prometheus.metrics.port=7777
+      --J=-Duser.timezone=America/Sao_Paulo
+      --J=-Dgemfire.prometheus.metrics.interval=15s
+    ports:
+      - "7074:7070"
+    depends_on:
+      gf4-locator:
+        condition: service_healthy
+
+  # ============================================
+  # Cluster 3 - Configuration
+  # ============================================
+  gf4-config:
+    image: gemfire/gemfire-all:10.3-jdk25
+    container_name: gf4-config
+    networks:
+      - gemfire-cache
+    depends_on:
+      gf4-server:
+        condition: service_started
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "Waiting for Cluster 4 to be ready..."
+        sleep 10
+        
+        echo "Configuring PDX on Cluster 4..."
+        gfsh -e "connect --locator=gf4-locator[10334]" \
+             -e "configure pdx --read-serialized=true --disk-store"
+        
+        echo "Setting up WAN gateway receiver on Cluster 4..."
+        gfsh -e "connect --locator=gf4-locator[10334]" \
+             -e "create gateway-receiver"
+        
+        echo "Setting up WAN gateway senders on Cluster 4..."
+        gfsh -e "connect --locator=gf4-locator[10334]" \
+             -e "create gateway-sender --id=Account_Sender_to_1 --parallel=true --remote-distributed-system-id=1 --enable-persistence=true --enable-batch-conflation=true" \
+             -e "create gateway-sender --id=Account_Sender_to_2 --parallel=true --remote-distributed-system-id=2 --enable-persistence=true --enable-batch-conflation=true" \
+             -e "create gateway-sender --id=Account_Sender_to_3 --parallel=true --remote-distributed-system-id=3 --enable-persistence=true --enable-batch-conflation=true" \
+             -e "create gateway-sender --id=Account_Sender_to_5 --parallel=true --remote-distributed-system-id=5 --enable-persistence=true --enable-batch-conflation=true"
+        
+        
+        echo "Creating regions on Cluster 4..."
+        gfsh -e "connect --locator=gf4-locator[10334]" \
+             -e "create region --name=Account --type=PARTITION --gateway-sender-id=Account_Sender_to_1,Account_Sender_to_2,Account_Sender_to_3,Account_Sender_to_5" \
+             -e "create region --name=health4 --type=PARTITION"
+        
+        echo "Cluster 4 configuration complete!"

@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>My Children Will Never Deploy Active-Passive | JCON USA 2026</title>
+
+		<link rel="icon" href="data:,">
+
+		<link rel="stylesheet" href="./reveal.js/dist/reset.css">
+		<link rel="stylesheet" href="./reveal.js/dist/reveal.css">
+		<link rel="stylesheet" href="./reveal.js/dist/theme/black.css">
+
+
+		<style>
+			/* Source Sans 3 (variable 200-900), self-hosted so the deck works offline */
+			@font-face {
+				font-family: "Source Sans 3";
+				src: url("./fonts/source-sans-3-latin-wght-normal.woff2") format("woff2-variations");
+				font-weight: 200 900;
+				font-style: normal;
+				font-display: block;
+			}
+			@font-face {
+				font-family: "Source Sans 3";
+				src: url("./fonts/source-sans-3-latin-wght-italic.woff2") format("woff2-variations");
+				font-weight: 200 900;
+				font-style: italic;
+				font-display: block;
+			}
+			:root {
+				--ink: #0B1220;
+				--surface: #111C2F;
+				--panel: #0D1526;
+				--panel-bar: #16233A;
+				--line: #223350;
+				--text: #EAF2FC;
+				--muted: #93A8C4;
+				--teal: #2DD4BF;
+				--amber: #FBBF24;
+				--red: #F87171;
+				--blue: #60A5FA;
+				--violet: #A78BFA;
+				--sans: "Source Sans 3", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+				--mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+				--r-background-color: var(--ink);
+				--r-main-font: var(--sans);
+				--r-heading-font: var(--sans);
+				--r-code-font: var(--mono);
+				--r-selection-background-color: rgba(45,212,191,0.35);
+				--r-selection-color: var(--text);
+			}
+			html, body { background: var(--ink); }
+			::selection { background: rgba(45,212,191,0.35); color: var(--text); }
+
+			/* Canvas is 1280x720 (see Reveal.initialize); sizes below are in that space */
+			.reveal {
+				font-family: var(--sans);
+				font-size: 44px;
+				font-weight: 500;
+				color: var(--text);
+			}
+			.reveal .slides { text-align: center; }
+			.reveal h1, .reveal h2, .reveal h3, .reveal h4 {
+				font-family: var(--sans);
+				font-weight: 800;
+				letter-spacing: -0.02em;
+				line-height: 1.08;
+				text-transform: none;
+				text-wrap: balance;
+				color: var(--text);
+				margin: 0 0 0.45em;
+			}
+			.reveal h1 { font-size: 2.4em; }
+			.reveal h2 { font-size: 1.55em; }
+			.reveal h3 { font-size: 1em; font-weight: 700; margin-bottom: 0.4em; }
+			.reveal p, .reveal li {
+				font-weight: 500;
+				color: var(--text);
+				line-height: 1.3;
+			}
+			.reveal p { text-wrap: pretty; }
+			.reveal strong { font-weight: 800; }
+
+			.reveal ul {
+				display: inline-block;
+				text-align: left;
+				list-style: none;
+				margin: 0;
+				padding: 0;
+			}
+			.reveal ul > li {
+				position: relative;
+				padding-left: 1.05em;
+				margin: 0.35em 0;
+			}
+			.reveal ul > li::before {
+				content: "";
+				position: absolute;
+				left: 0.1em;
+				top: 0.48em;
+				width: 0.4em;
+				height: 0.4em;
+				border-radius: 2px;
+				background: var(--teal);
+				transform: rotate(45deg);
+			}
+			.reveal ol {
+				display: inline-block;
+				text-align: left;
+				margin: 0;
+				padding-left: 1.4em;
+				max-width: 30em;
+			}
+			.reveal ol > li { margin: 0.45em 0; }
+			.reveal ol > li::marker { color: var(--teal); font-weight: 800; }
+
+			/* Nested lists (intro career timeline) */
+			.reveal ul ul {
+				display: block;
+				list-style: none;
+				margin: 0.25em 0 0;
+				font-size: 0.72em;
+				color: var(--muted);
+			}
+			.reveal ul ul > li { color: var(--muted); margin: 0.3em 0; }
+			.reveal ul ul > li::before { background: var(--line); }
+			.reveal .days-since { color: var(--teal); font-weight: 800; font-variant-numeric: tabular-nums; }
+
+			.reveal a { color: var(--teal); text-decoration: none; }
+			.reveal a:hover { text-decoration: underline; text-underline-offset: 0.15em; }
+			.reveal a:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; border-radius: 4px; }
+
+			/* Intro collage: Coffee+Software, AAIF, Pro Spring Boot 4, Spring Office Hours */
+			.reveal .four-up {
+				width: 1180px;
+				height: 620px;
+				margin: 0 auto;
+				display: grid;
+				grid-template-columns: 0.9fr 1.1fr 0.9fr;
+				grid-template-rows: 1fr 1.25fr;
+				grid-template-areas:
+					"coffee coffee aaif"
+					"book   spring spring";
+				gap: 20px 28px;
+			}
+			.reveal .four-up .item:nth-child(1) { grid-area: spring; }
+			.reveal .four-up .item:nth-child(2) { grid-area: aaif; }
+			.reveal .four-up .item:nth-child(3) { grid-area: book; }
+			.reveal .four-up .item:nth-child(4) { grid-area: coffee; }
+			.reveal .four-up .item {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				min-width: 0;
+				min-height: 0;
+				color: inherit;
+			}
+			.reveal .four-up .shot {
+				flex: 1 1 auto;
+				min-height: 0;
+				width: 100%;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+			.reveal .four-up .shot img {
+				max-width: 100%;
+				max-height: 100%;
+				object-fit: contain;
+				margin: 0;
+				border-radius: 12px;
+				box-shadow: 0 18px 40px -12px rgba(0,0,0,0.6);
+			}
+			.reveal .four-up .label {
+				flex: 0 0 auto;
+				margin-top: 10px;
+				font-size: 0.5em;
+				font-weight: 600;
+				color: var(--muted);
+			}
+			.reveal .four-up a.item:hover .label { color: var(--teal); }
+
+			.reveal img.family {
+				max-height: 640px;
+				width: auto;
+				margin: 0;
+				border-radius: 16px;
+				box-shadow: 0 18px 40px -12px rgba(0,0,0,0.6);
+			}
+
+			/* Statement slides */
+			.reveal .big {
+				font-size: 1.6em;
+				font-weight: 800;
+				line-height: 1.15;
+				letter-spacing: -0.02em;
+				text-wrap: balance;
+			}
+			.reveal .big.sub {
+				font-size: 1em;
+				line-height: 1.25;
+				margin-top: 0.7em;
+			}
+			.reveal .big .accent { color: var(--teal); }
+			.reveal .big .warn { color: var(--red); }
+			.reveal .big .gold { color: var(--amber); }
+
+			/* Standfirst under a heading */
+			.reveal .lead {
+				font-size: 0.72em;
+				color: var(--muted);
+				max-width: 38em;
+				margin: -0.2em auto 0.8em;
+				text-wrap: balance;
+			}
+
+			/* One caption style for every supporting line under a figure */
+			.reveal .caption {
+				font-size: 0.62em;
+				font-weight: 500;
+				color: var(--muted);
+				margin-top: 0.7em;
+				text-wrap: balance;
+			}
+
+			.reveal .muted { color: var(--muted); }
+			.reveal .teal { color: var(--teal); }
+			.reveal .amber { color: var(--amber); }
+			.reveal .red { color: var(--red); }
+			.reveal .blue { color: var(--blue); }
+			.reveal .violet { color: var(--violet); }
+			.reveal .warn { color: var(--red); }
+
+			/* Stat blocks */
+			.stats {
+				display: flex;
+				gap: 0.7em;
+				justify-content: center;
+				align-items: stretch;
+			}
+			.stat {
+				background: var(--surface);
+				border: 1px solid var(--line);
+				border-radius: 16px;
+				padding: 0.45em 1em 0.5em;
+				min-width: 3.4em;
+			}
+			.stat .n {
+				font-size: 1.9em;
+				font-weight: 800;
+				letter-spacing: -0.03em;
+				line-height: 1.05;
+			}
+			.stat .l {
+				font-size: 0.5em;
+				font-weight: 700;
+				color: var(--muted);
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+				margin-top: 0.3em;
+			}
+
+			/* Panel for code, diagrams, and shell output */
+			.frame {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 14px;
+				padding: 4px 6px;
+				display: inline-block;
+				max-width: 100%;
+				box-sizing: border-box;
+				box-shadow: 0 18px 40px -12px rgba(0,0,0,0.6);
+			}
+			.reveal .frame pre {
+				width: auto;
+				margin: 0;
+				box-shadow: none;
+			}
+			.reveal .frame pre code {
+				overflow: visible;
+				max-height: none;
+				background: none;
+				border: none;
+				box-shadow: none;
+			}
+			.reveal img.clean {
+				background: none;
+				border: none;
+				box-shadow: none;
+				margin: 0;
+			}
+
+			/* Terminal window chrome for shell snippets: <div class="frame shell"> */
+			.frame.shell {
+				padding: 0 0 4px;
+				text-align: left;
+				overflow: hidden;
+			}
+			.frame.shell::before {
+				content: "";
+				display: block;
+				height: 30px;
+				background:
+					radial-gradient(circle at 20px 15px, #ff5f57 5.5px, transparent 6.5px),
+					radial-gradient(circle at 40px 15px, #febc2e 5.5px, transparent 6.5px),
+					radial-gradient(circle at 60px 15px, #28c840 5.5px, transparent 6.5px),
+					var(--panel-bar);
+				border-bottom: 1px solid var(--line);
+			}
+			.reveal .frame.shell pre code { border-radius: 0; }
+
+			/* Columns of cards */
+			.cols {
+				display: flex;
+				gap: 0.8em;
+				justify-content: center;
+				align-items: stretch;
+				width: 94%;
+				margin: 0 auto;
+			}
+			.col {
+				flex: 1 1 0;
+				background: var(--surface);
+				border: 1px solid var(--line);
+				border-radius: 16px;
+				padding: 0.55em 0.85em 0.6em;
+				text-align: left;
+			}
+			.col h3 { font-size: 0.82em; margin: 0 0 0.35em; }
+			.col ul { font-size: 0.68em; display: block; }
+			.col ul li { margin: 0.3em 0; }
+			.col.teal { border-top: 4px solid var(--teal); }
+			.col.amber { border-top: 4px solid var(--amber); }
+			.col.red { border-top: 4px solid var(--red); }
+			.col.blue { border-top: 4px solid var(--blue); }
+			.col.violet { border-top: 4px solid var(--violet); }
+			.col.red ul > li::before { background: var(--red); }
+			.col.amber ul > li::before { background: var(--amber); }
+			.col.blue ul > li::before { background: var(--blue); }
+
+			/* Code next to its explanation */
+			.split {
+				display: grid;
+				grid-template-columns: auto minmax(0, 1fr);
+				gap: 0.8em;
+				align-items: center;
+				width: 94%;
+				margin: 0 auto;
+			}
+			.split .col { align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
+			/* code panels one above the other, left edges aligned */
+			.stack { display: grid; grid-template-columns: max-content; justify-content: center; gap: 0.45em; }
+			/* two code panels side by side, each as wide as its longest line */
+			.split.fit { grid-template-columns: auto auto; justify-content: center; }
+
+			/* Quote slides: under a heading the quote is italic and a step lighter,
+			   so the heading still leads; a quote that opens the slide is the headline */
+			.reveal blockquote {
+				background: none;
+				border: none;
+				box-shadow: none;
+				width: auto;
+				margin: 0 auto;
+				padding: 0;
+				font-size: 1.1em;
+				font-style: italic;
+				font-weight: 600;
+				line-height: 1.3;
+				letter-spacing: -0.01em;
+				color: var(--text);
+				max-width: 28ch;
+				text-wrap: balance;
+			}
+			.reveal section > blockquote:first-child {
+				font-size: 1.4em;
+				font-style: normal;
+				font-weight: 500;
+				line-height: 1.2;
+				letter-spacing: -0.02em;
+				max-width: 24ch;
+			}
+			.reveal blockquote p { margin: 0; line-height: inherit; }
+			.reveal .who {
+				display: block;
+				margin-top: 0.9em;
+				font-size: 0.62em;
+				font-weight: 600;
+				color: var(--muted);
+				letter-spacing: 0.06em;
+			}
+
+			/* Code */
+			.reveal code {
+				font-family: var(--mono);
+				font-size: 0.85em;
+				background: rgba(45,212,191,0.1);
+				color: var(--teal);
+				border-radius: 5px;
+				padding: 0.05em 0.25em;
+			}
+			.reveal pre {
+				font-size: 0.5em;
+				width: auto;
+				margin: 0;
+				box-shadow: none;
+			}
+			.reveal pre code {
+				display: block;
+				font-size: 1em;
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 14px;
+				color: var(--text);
+				padding: 0.7em 1em;
+				line-height: 1.4;
+				max-height: none;
+				text-align: left;
+				box-shadow: 0 18px 40px -12px rgba(0,0,0,0.6);
+			}
+			/* Syntax colors from the deck palette (replaces monokai) */
+			.reveal .hljs { background: none; color: var(--text); }
+			/* box-drawing diagrams need tight lines so the strokes connect */
+			.reveal pre code.diagram { line-height: 1.12; }
+			.hljs-comment, .hljs-quote { color: var(--muted); font-style: italic; }
+			.hljs-keyword, .hljs-built_in, .hljs-literal, .hljs-selector-tag { color: var(--teal); }
+			.hljs-string, .hljs-regexp { color: var(--amber); }
+			.hljs-number, .hljs-meta, .hljs-symbol { color: var(--violet); }
+			.hljs-title, .hljs-type, .hljs-section, .hljs-attr { color: var(--blue); }
+			.hljs-variable, .hljs-params, .hljs-property { color: var(--text); }
+
+			/* Footer */
+			.deck-foot {
+				position: fixed;
+				bottom: 14px;
+				left: 0;
+				right: 0;
+				display: flex;
+				justify-content: space-between;
+				padding: 0 40px;
+				font-family: var(--sans);
+				font-size: 14px;
+				font-weight: 700;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+				color: rgba(147,168,196,0.85);
+				z-index: 30;
+				pointer-events: none;
+			}
+
+			.reveal .progress { color: var(--teal); height: 4px; }
+			.reveal .controls { color: var(--muted); }
+			.reveal section img { background: none; border: none; box-shadow: none; }
+
+			/* Data tables (region status panels): monospace numerals for stable columns */
+			.reveal table.data {
+				width: auto;
+				margin: 0 auto;
+				border-collapse: separate;
+				border-spacing: 0;
+				font-family: var(--mono);
+				font-size: 0.56em;
+				font-variant-numeric: tabular-nums;
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 14px;
+				overflow: hidden;
+				box-shadow: 0 18px 40px -12px rgba(0,0,0,0.6);
+			}
+			.reveal table.data th {
+				font-family: var(--mono);
+				font-size: 0.9em;
+				font-weight: 600;
+				letter-spacing: 0.06em;
+				text-transform: uppercase;
+				color: var(--muted);
+				background: var(--panel-bar);
+				padding: 0.55em 1.1em;
+				border-bottom: 1px solid var(--line);
+				text-align: left;
+			}
+			.reveal table.data td {
+				padding: 0.38em 1.1em;
+				text-align: left;
+				color: var(--text);
+				border-bottom: 1px solid rgba(34,51,80,0.6);
+			}
+			.reveal table.data tr:last-child td { border-bottom: none; }
+			.reveal table.data td.up { color: var(--teal); }
+			.reveal table.data td.down { color: var(--red); }
+			.reveal table.data td.muted { color: var(--muted); }
+
+			/* Live terminal docked under data-terminal slides (presenter/server.js) */
+			body.reveal-viewport.term-docked { height: 60vh !important; }
+			body.term-docked .deck-foot { display: none; }
+			body.term-live section[data-terminal] .fallback { display: none !important; }
+			#terminal-shell {
+				display: none;
+				position: fixed;
+				left: 0;
+				right: 0;
+				bottom: 0;
+				height: 40vh;
+				z-index: 60;
+				background: var(--panel);
+				border-top: 1px solid var(--line);
+				box-shadow: 0 -12px 40px -8px rgba(0,0,0,0.6);
+			}
+			body.term-docked #terminal-shell { display: block; }
+			#terminal-bar {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				height: 34px;
+				box-sizing: border-box;
+				padding: 8px 14px;
+				background: var(--panel-bar);
+				border-bottom: 1px solid var(--line);
+				font: 600 13px/18px var(--mono);
+				color: var(--muted);
+			}
+			#terminal-bar .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+			#terminal-bar .dot.red { background: #ff5f57; }
+			#terminal-bar .dot.yellow { background: #febc2e; }
+			#terminal-bar .dot.green { background: #28c840; }
+			#term-title { margin-left: 6px; color: var(--text); }
+			#term-status { margin-left: auto; color: var(--teal); font-weight: 500; }
+			#term-restart {
+				margin-left: 10px;
+				background: transparent;
+				color: var(--muted);
+				border: 1px solid var(--line);
+				border-radius: 5px;
+				padding: 2px 8px;
+				font: inherit;
+				line-height: 18px;
+				cursor: pointer;
+			}
+			#term-restart:hover { color: var(--text); border-color: var(--teal); }
+			#term-restart:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+			#terminal { height: calc(100% - 34px); padding: 6px 10px; box-sizing: border-box; }
+		</style>
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section data-markdown="markdown/main.md"
+						 data-separator="^]]]"
+						 data-separator-vertical="^---"
+						 data-separator-notes="^Notes:"
+						 data-charset="utf8">
+				</section>
+				<section data-markdown="markdown/1-why.md"
+						 data-separator="^]]]"
+						 data-separator-vertical="^---"
+						 data-separator-notes="^Notes:"
+						 data-charset="utf8">
+				</section>
+				<section data-markdown="markdown/3-transform.md"
+						 data-separator="^]]]"
+						 data-separator-vertical="^---"
+						 data-separator-notes="^Notes:"
+						 data-charset="utf8">
+				</section>
+				<section data-markdown="markdown/4-demo.md"
+						 data-separator="^]]]"
+						 data-separator-vertical="^---"
+						 data-separator-notes="^Notes:"
+						 data-charset="utf8">
+				</section>
+				<section data-markdown="markdown/2-antipattern.md"
+						 data-separator="^]]]"
+						 data-separator-vertical="^---"
+						 data-separator-notes="^Notes:"
+						 data-charset="utf8">
+				</section>
+				<section data-markdown="markdown/4-recovery.md"
+						 data-separator="^]]]"
+						 data-separator-vertical="^---"
+						 data-separator-notes="^Notes:"
+						 data-charset="utf8">
+				</section>
+				<section data-markdown="markdown/5-recap.md"
+						 data-separator="^]]]"
+						 data-separator-vertical="^---"
+						 data-separator-notes="^Notes:"
+						 data-charset="utf8">
+				</section>
+				<section data-markdown="markdown/thanks.md"
+						 data-separator="^]]]"
+						 data-separator-vertical="^---"
+						 data-separator-notes="^Notes:"
+						 data-charset="utf8">
+				</section>
+			</div>
+		</div>
+
+		<div class="deck-foot">
+			<span>DASHAUN CARTER</span>
+			<span>MY CHILDREN WILL NEVER DEPLOY ACTIVE-PASSIVE &middot; JCON USA 2026</span>
+		</div>
+
+		<div id="terminal-shell">
+			<div id="terminal-bar">
+				<span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+				<span id="term-title">demo — live</span>
+				<span id="term-status">connecting…</span>
+				<button id="term-restart" title="Kill and restart the shell">↻ restart</button>
+			</div>
+			<div id="terminal"></div>
+		</div>
+
+		<script src="./reveal.js/dist/reveal.js"></script>
+		<script src="./reveal.js/plugin/markdown/markdown.js"></script>
+		<script src="./reveal.js/plugin/highlight/highlight.js"></script>
+		<script src="./reveal.js/plugin/notes/notes.js"></script>
+
+		<script>
+			Reveal.initialize({
+				width: 1280,
+				height: 720,
+				margin: 0.05,
+				controls: false,
+				progress: true,
+				history: true,
+				center: true,
+				hash: true,
+				transition: 'fade',
+				transitionSpeed: 'fast',
+				backgroundTransition: 'fade',
+				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
+			});
+			Reveal.configure({
+				showNotes: false,
+				pdfSeparateFragments: false,
+				pdfMaxPagesPerSlide: 1
+			});
+		</script>
+		<script src="./js/terminal.js"></script>
+		<script>
+			// Intro: live count of days as Spring Developer Advocate, from data-since
+			function countDays() {
+				document.querySelectorAll('.days-since').forEach((el) => {
+					const days = Math.ceil((Date.now() - new Date(el.dataset.since + 'T00:00:00')) / 86400000);
+					el.textContent = days.toLocaleString('en-US');
+				});
+			}
+			if (Reveal.isReady()) countDays();
+			else Reveal.on('ready', countDays);
+		</script>
+	</body>
+</html>
